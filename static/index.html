@@ -210,6 +210,18 @@
     .export-btn:hover { background: var(--mint); }
     .export-btn.copied { background: var(--mint); }
 
+    .explore-btn {
+      margin-top: 0.5rem;
+      background: #fff; border: 2px solid var(--ink); color: var(--ink);
+      cursor: pointer;
+      font-family: ui-monospace,'SF Mono',Menlo,monospace;
+      font-size: 9px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.04em; padding: 0.35rem 0.7rem;
+      box-shadow: 1px 1px 0 0 var(--ink); transition: background 0.05s;
+    }
+    .explore-btn:hover { background: var(--mint); }
+    .explore-btn:disabled { opacity: 0.3; cursor: default; box-shadow: none; }
+
     /* Freeform */
     .freeform-inner {
       border: 2px solid var(--ink); background: #fff;
@@ -490,8 +502,17 @@
         const desc = document.createElement("div");
         desc.className = "idea-desc";
         desc.textContent = idea.description;
+        const exploreBtn = document.createElement("button");
+        exploreBtn.className = "explore-btn";
+        exploreBtn.textContent = "Utforsk →";
+        exploreBtn.addEventListener("click", () => {
+          document.querySelectorAll(".explore-btn").forEach(b => b.disabled = true);
+          exploreBtn.style.background = "var(--mint)";
+          exploreIdea(idea);
+        });
         text.appendChild(title);
         text.appendChild(desc);
+        text.appendChild(exploreBtn);
         item.appendChild(folder);
         item.appendChild(text);
         ideas.appendChild(item);
@@ -539,7 +560,34 @@
       const inner = document.createElement("div");
       inner.className = "freeform-inner";
       content.appendChild(inner);
-      typewriter(inner, text);
+      typewriter(inner, text, () => {
+        const bar = document.createElement("div");
+        bar.className = "export-bar";
+        const copyBtn = document.createElement("button");
+        copyBtn.className = "export-btn";
+        copyBtn.textContent = "⎘ Copy .md";
+        copyBtn.addEventListener("click", () => {
+          navigator.clipboard.writeText(text).then(() => {
+            copyBtn.textContent = "✓ Copied!";
+            copyBtn.classList.add("copied");
+            setTimeout(() => { copyBtn.textContent = "⎘ Copy .md"; copyBtn.classList.remove("copied"); }, 2000);
+          });
+        });
+        const dlBtn = document.createElement("button");
+        dlBtn.className = "export-btn";
+        dlBtn.textContent = "💾 Save to Disk";
+        dlBtn.addEventListener("click", () => {
+          const blob = new Blob([text], { type: "text/markdown" });
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = "utforskning-" + new Date().toISOString().slice(0,10) + ".md";
+          a.click();
+          URL.revokeObjectURL(a.href);
+        });
+        bar.appendChild(copyBtn);
+        bar.appendChild(dlBtn);
+        content.appendChild(bar);
+      });
     }
 
     function addUserBubble(text) {
@@ -560,6 +608,32 @@
       chatEl.appendChild(row);
     }
 
+    function exploreIdea(idea) {
+      const userAnswers = state.history
+        .filter(m => m.role === "user")
+        .map(m => m.content)
+        .join("; ");
+      const contextMessage = `Jeg vil utforske dette forslaget dypere: "${idea.title}". ${idea.description}. Bakgrunn fra innledende samtale: ${userAnswers}.`;
+      state = { history: [], question_count: 0, phase: "questioning", max_questions: state.max_questions };
+      addUserBubble("Utforsk: " + idea.title);
+      setLoading(true);
+      fetch("/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...state, user_answer: contextMessage }),
+      })
+      .then(res => res.ok ? res.json() : res.json().then(e => Promise.reject(e)))
+      .then(data => {
+        state = { history: data.history, question_count: data.question_count, phase: data.phase, max_questions: data.max_questions };
+        if (data.response.type === "question") addQuestionBubble(data.response);
+        else if (data.response.type === "summary") addSummaryBubble(data.response);
+        else if (data.response.type === "freeform") addFreeformBubble(data.response.text);
+        chatEl.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "end" });
+      })
+      .catch(e => showError(e.detail || e.message || "ukjent feil"))
+      .finally(() => setLoading(false));
+    }
+
     function toMarkdown(ideas) {
       const date = new Date().toLocaleDateString("no-NO", { dateStyle: "long" });
       const lines = ["# Idé-myldrer — forslag", "", `_Generert ${date}_`, ""];
@@ -567,12 +641,13 @@
       return lines.join("\n");
     }
 
-    function typewriter(el, text, onDone, speed = 18) {
+    function typewriter(el, text, onDone) {
       if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
         el.textContent = text;
         onDone?.();
         return;
       }
+      const speed = Math.min(30, Math.max(8, Math.round(2000 / text.length)));
       let i = 0;
       el.textContent = "";
       const tick = () => {
